@@ -6,57 +6,112 @@ from typing import Mapping
 
 import numpy as np
 
-# Combat archetypes (starting units + probabilities)
-STRATEGY_PRESETS: dict[str, dict[str, float]] = {
-    "Balanced (Standard)": {
-        "units": 10,
-        "attacker_win_prob": 0.55,
+# Combat archetypes (starting units + base quality + hard counter)
+STRATEGY_PRESETS: dict[str, dict[str, float | str]] = {
+    "Balanced": {
+        "units": 12,
+        "base_quality": 0.50,
+        "hard_counter": "Greedy",
     },
-    "Blitzkrieg (Aggressive Strike)": {
+    "Blitz": {
+        "units": 7,
+        "base_quality": 0.87,
+        "hard_counter": "Tank",
+    },
+    "Tank": {
+        "units": 22,
+        "base_quality": 0.27,
+        "hard_counter": "Balanced",
+    },
+    "Swarm": {
+        "units": 26,
+        "base_quality": 0.23,
+        "hard_counter": "Sniper",
+    },
+    "Greedy": {
         "units": 8,
-        "attacker_win_prob": 0.65,
+        "base_quality": 0.76,
+        "hard_counter": "Swarm",
     },
-    "Tortoise (Defensive Wall)": {
-        "units": 14,
-        "attacker_win_prob": 0.45,
+    "Sniper": {
+        "units": 4,
+        "base_quality": 1.59,
+        "hard_counter": "Artillery",
     },
-    "Swarm (Zerg Rush)": {
-        "units": 20,
-        "attacker_win_prob": 0.38,
+    "Shield": {
+        "units": 16,
+        "base_quality": 0.37,
+        "hard_counter": "Blitz",
     },
-    "Greedy (High Roller)": {
-        "units": 25,
-        "attacker_win_prob": 0.36,
-    },
-    "Sniper (Elite Force)": {
-        "units": 5,
-        "attacker_win_prob": 0.82,
+    "Artillery": {
+        "units": 6,
+        "base_quality": 1.03,
+        "hard_counter": "Shield",
     },
 }
 
-DEFAULT_STRATEGY = "Balanced (Standard)"
+DEFAULT_STRATEGY = "Balanced"
+
+
+# Counter modifier matrix: attacker -> defender -> multiplier
+# A value > 1.0 means attacker gets a bonus against this defender
+# A value < 1.0 means attacker gets a penalty against this defender
+COUNTER_MODIFIER: float = 0.20  # 20% quality boost/penalty for hard counter relationships
+
+
+def _build_counter_matrix() -> dict[str, dict[str, float]]:
+    """Build the hard-counter modifier matrix from STRATEGY_PRESETS."""
+    archetypes = list(STRATEGY_PRESETS.keys())
+    matrix = {a: {d: 1.0 for d in archetypes} for a in archetypes}
+    for attacker, data in STRATEGY_PRESETS.items():
+        hard_counter = data.get("hard_counter")
+        if hard_counter and hard_counter in archetypes:
+            # Attacker gets a boost when attacking their hard counter
+            matrix[attacker][hard_counter] = 1.0 + COUNTER_MODIFIER
+            # Defender gets a penalty when attacked by their hard counter
+            matrix[hard_counter][attacker] = 1.0 - COUNTER_MODIFIER
+    return matrix
+
+
+COUNTER_MATRIX = _build_counter_matrix()
+
 
 def strategy_short_name(strategy_name: str) -> str:
     return strategy_name.split(" (")[0]
 
 
 def clash_win_probability(attacker_quality: float, defender_quality: float) -> float:
-    """Calculates normalized win probability"""
+    """Calculates normalized win probability.
+
+    Handles base qualities of any non-negative value (including > 1.0)
+    by normalizing via the ratio att_q / (att_q + def_q).
+    """
     att_q = float(attacker_quality)
     def_q = float(defender_quality)
     if att_q < 0 or def_q < 0:
         raise ValueError("Archetype qualities cannot be negative.")
     if att_q == 0 and def_q == 0:
         return 0.5
+    # Normalized probability is always in (0, 1) for positive qualities
     return att_q / (att_q + def_q)
 
 
 def resolve_archetype_matchup(
     attacker_strategy: str,
     defender_strategy: str,
-    presets: Mapping[str, Mapping[str, float]] | None = None,
+    presets: Mapping[str, Mapping[str, float | str]] | None = None,
+    apply_counter_modifier: bool = True,
+    counter_modifier: float = 0.20,
 ) -> dict:
-    """Map strategy names to parameters"""
+    """Map strategy names to simulation parameters, applying hard-counter modifiers.
+
+    Args:
+        attacker_strategy: Name of the attacking archetype.
+        defender_strategy: Name of the defending archetype.
+        presets: Optional override presets table.
+        apply_counter_modifier: Whether to apply hard-counter quality adjustments.
+        counter_modifier: Multiplier strength (e.g. 0.20 = 20% boost/penalty).
+    """
     table = presets if presets is not None else STRATEGY_PRESETS
     if attacker_strategy not in table:
         raise KeyError(f"Unknown attacker strategy: {attacker_strategy!r}")
@@ -67,8 +122,22 @@ def resolve_archetype_matchup(
     defender = table[defender_strategy]
     att_units = int(attacker["units"])
     def_units = int(defender["units"])
-    att_q = float(attacker["attacker_win_prob"])
-    def_q = float(defender["attacker_win_prob"])
+    att_q = float(attacker["base_quality"])
+    def_q = float(defender["base_quality"])
+
+    # Apply hard-counter modifier if enabled
+    modifier = 1.0
+    if apply_counter_modifier:
+        attacker_hard_counter = attacker.get("hard_counter")
+        defender_hard_counter = defender.get("hard_counter")
+        if attacker_hard_counter == defender_strategy:
+            # Attacker gets a boost when attacking their hard counter
+            modifier = 1.0 + counter_modifier
+        elif defender_hard_counter == attacker_strategy:
+            # Defender gets a penalty when attacked by their hard counter
+            modifier = 1.0 - counter_modifier
+        att_q = att_q * modifier
+
     clash_p = clash_win_probability(att_q, def_q)
 
     return {
@@ -78,9 +147,11 @@ def resolve_archetype_matchup(
         "defender_short_name": strategy_short_name(defender_strategy),
         "attacker_units": att_units,
         "defender_units": def_units,
-        "attacker_archetype_prob": att_q,
-        "defender_archetype_prob": def_q,
+        "attacker_archetype_prob": float(attacker["base_quality"]),
+        "defender_archetype_prob": float(defender["base_quality"]),
         "attacker_win_prob": clash_p,
+        "counter_modifier_applied": apply_counter_modifier and modifier != 1.0,
+        "effective_attacker_quality": att_q,
     }
 
 
@@ -166,17 +237,19 @@ def _summarize(
 
 
 if __name__ == "__main__":
-    # Local execution
+    # Local execution - demonstrate a hard counter matchup
     matchup = resolve_archetype_matchup(
-        "Blitzkrieg (Aggressive Strike)",
-        "Tortoise (Defensive Wall)",
+        "Blitz",
+        "Tank",  # Blitz hard counters Tank
     )
     print(
         f"Running 50,000 Monte Carlo battles: "
         f"{matchup['attacker_short_name']} vs. {matchup['defender_short_name']} "
         f"({matchup['attacker_units']} vs {matchup['defender_units']}, "
-        f"clash p={matchup['attacker_win_prob']:.3f})..."
+        f"clash p={matchup['attacker_win_prob']:.3f})"
     )
+    if matchup.get("counter_modifier_applied"):
+        print(f"  (Hard counter bonus: attacker quality boosted to {matchup['effective_attacker_quality']:.2f})")
     result = run_monte_carlo_game(
         num_simulations=50_000,
         attacker_units=matchup["attacker_units"],

@@ -134,7 +134,26 @@ with st.sidebar:
         help="Archetype for the defending AI. Loads units and clash quality.",
     )
 
-    matchup = resolve_archetype_matchup(attacker_strategy, defender_strategy)
+    # Hard Counter Bonus Strength slider
+    counter_modifier = st.slider(
+        "Hard Counter Bonus Strength",
+        min_value=1.0,
+        max_value=2.0,
+        value=1.2,
+        step=0.05,
+        help=(
+            "Multiplier applied when an archetype faces its hard counter. "
+            "1.0 = no bonus, 1.2 = 20% quality boost/penalty (default), "
+            "2.0 = 100% boost/penalty."
+        ),
+    )
+    counter_modifier_frac = counter_modifier - 1.0  # Convert to fraction (1.2 -> 0.20)
+
+    matchup = resolve_archetype_matchup(
+        attacker_strategy,
+        defender_strategy,
+        counter_modifier=counter_modifier_frac,
+    )
     st.caption(
         f"{matchup['attacker_short_name']}: "
         f"{matchup['attacker_units']} units · quality "
@@ -150,6 +169,23 @@ with st.sidebar:
         f"{matchup['attacker_win_prob']:.3f}  "
         f"(quality_att / (quality_att + quality_def))"
     )
+
+    # How Hard Counters Work info box
+    with st.expander("How Hard Counters Work", expanded=False):
+        st.markdown(
+            """
+            **Hard counters create rock-paper-scissors dynamics:**
+            
+            - When **Archetype A** hard-counters **Archetype B**, A gets a 
+              **strategic quality multiplier** (bonus) when attacking B.
+            - Conversely, B takes a **penalty** when attacked by its hard counter.
+            - The bonus/penalty strength is controlled by the slider above.
+            
+            **Example:** Sniper (1.59 quality) hard-counters Artillery (1.03).
+            With default 1.2× bonus, Sniper's effective quality becomes 1.91
+            against Artillery, significantly increasing its clash win probability.
+            """
+        )
 
     num_simulations = st.slider(
         "Number of Simulations",
@@ -195,14 +231,15 @@ with st.sidebar:
         attacker_full_name = "Custom"
         defender_full_name = "Custom"
     else:
-        # Execute with archetype values
-        attacker_units = int(matchup["attacker_units"])
         defender_units = int(matchup["defender_units"])
         attacker_win_prob = float(matchup["attacker_win_prob"])
         attacker_label = matchup["attacker_short_name"]
         defender_label = matchup["defender_short_name"]
         attacker_full_name = attacker_strategy
         defender_full_name = defender_strategy
+
+    # Footer caption
+    st.caption("Live convergence plots & deeper parameter settings coming in the next update!")
 
     run_clicked = st.button("Run Simulation", type="primary")
 
@@ -382,7 +419,8 @@ run_tournament = st.button(
 if run_tournament:
     with st.spinner(f"Running {len(STRATEGY_PRESETS)}×{len(STRATEGY_PRESETS)} tournament..."):
         tournament_df = run_round_robin_tournament(
-            num_simulations_per_matchup=tournament_simulations
+            num_simulations_per_matchup=tournament_simulations,
+            counter_modifier=counter_modifier_frac,
         )
         st.session_state["tournament_df"] = tournament_df
 

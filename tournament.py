@@ -15,8 +15,14 @@ from simulation import (
 
 def run_round_robin_tournament(
     num_simulations_per_matchup: int = 50_000,
+    counter_modifier: float = 0.20,
 ) -> pd.DataFrame:
-    """Execute the simulations"""
+    """Execute the simulations
+
+    Args:
+        num_simulations_per_matchup: Number of Monte Carlo simulations per matchup.
+        counter_modifier: Multiplier strength for hard counter relationships (e.g. 0.20 = 20%).
+    """
     # Get list of strategy names
     strategies = list(STRATEGY_PRESETS.keys())
     n = len(strategies)
@@ -36,6 +42,7 @@ def run_round_robin_tournament(
             params = resolve_archetype_matchup(
                 attacker_strategy,
                 defender_strategy,
+                counter_modifier=counter_modifier,
             )
             
             # Run Monte Carlo simulation
